@@ -4,6 +4,7 @@ import TopicSelector from './components/TopicSelector';
 import CrosswordGrid from './components/CrosswordGrid';
 import ScoreBoard from './components/ScoreBoard';
 import axios from 'axios';
+import Fireworks from './components/Fireworks';
 
 function App() {
   const [topic, setTopic] = useState('');
@@ -13,6 +14,9 @@ function App() {
   const [completedWords, setCompletedWords] = useState([]);
   const [crosswordData, setCrosswordData] = useState(null);
   const [loading, setLoading] = useState(false);
+  const [gameCompleted, setGameCompleted] = useState(false);
+  const [showCelebration, setShowCelebration] = useState(false);
+  const [apiError, setApiError] = useState(null);
 
   // Static fallback word database
   const fallbackWordData = {
@@ -30,14 +34,31 @@ function App() {
   const handleTopicSubmit = async (selectedTopic) => {
     setTopic(selectedTopic);
     setLoading(true);
+    setApiError(null);
+    setCompletedWords([]); // Reset completed words
     
     try {
-      // Try to get words from Anthropic API
+      console.log(`Submitting topic: ${selectedTopic}`);
+      
+      // First check if the server is healthy
+      const healthCheck = await axios.get('http://localhost:3020/api/health');
+      console.log('Server health check:', healthCheck.data);
+      
+      // Call the backend API to get words from Anthropic
       const response = await axios.post('http://localhost:3020/api/generate-words', {
         topic: selectedTopic
       });
       
+      console.log('API response received:', response.data);
+      
       const wordList = response.data.words;
+      
+      if (!wordList || wordList.length === 0) {
+        throw new Error('No words returned from API');
+      }
+      
+      // Log the words for debugging
+      console.log('Words generated:', wordList);
       
       // Generate crossword with the dynamically generated words
       let data = createCrosswordLayout(wordList);
@@ -45,8 +66,12 @@ function App() {
       // Add prefilled cells to the crossword
       data = addPrefilledCells(data);
       
+      // Ensure we set the total words correctly
+      const actualWordCount = data.words.length;
+      console.log(`Setting total words to: ${actualWordCount}`);
+      
       setCrosswordData(data);
-      setTotalWords(data.words.length);
+      setTotalWords(actualWordCount);
       setGameStarted(true);
     } catch (error) {
       console.error("Error generating crossword:", error);
@@ -71,10 +96,67 @@ function App() {
     }
   };
 
-  const handleWordComplete = (wordData) => {
-    const wordString = wordData.word;
-    setCompletedWords([...completedWords, wordString]);
-    setScore(score + wordString.length * 10); // Score based on word length
+  const handleWordComplete = (word) => {
+    setCompletedWords(prevCompletedWords => {
+      // First, check if this word is already in completed words to prevent duplicates
+      if (prevCompletedWords.some(w => 
+          (typeof w === 'string' && w === word) || 
+          (w.word && w.word === word)
+      )) {
+        return prevCompletedWords; // Word already completed, don't add again
+      }
+      
+      const newCompletedWords = [...prevCompletedWords, word];
+      
+      // Calculate score - ensuring we're properly accessing the word length
+      const newScore = newCompletedWords.reduce((total, w) => {
+        // Make sure we're accessing the word property (not the entire word object)
+        const wordLength = typeof w === 'string' ? w.length : w.word?.length || 0;
+        return total + (wordLength * 10);
+      }, 0);
+      
+      setScore(newScore);
+      
+      // Debug logging
+      console.log(`Completed ${newCompletedWords.length} out of ${totalWords} words`);
+      console.log('Completed words:', newCompletedWords);
+      
+      // Only show celebration when ALL words are truly completed
+      if (newCompletedWords.length === totalWords && totalWords > 0) {
+        // Double-check by comparing with crosswordData
+        const allWordsInPuzzle = crosswordData?.words || [];
+        const allWordsCompleted = allWordsInPuzzle.every(puzzleWord => {
+          return newCompletedWords.some(completedWord => {
+            const completedText = typeof completedWord === 'string' ? 
+              completedWord : completedWord.word;
+            return completedText === puzzleWord.word;
+          });
+        });
+        
+        console.log('All words completed check:', allWordsCompleted);
+        
+        if (allWordsCompleted) {
+          setGameCompleted(true);
+          setShowCelebration(true);
+          
+          // Hide celebration after 8 seconds
+          setTimeout(() => {
+            setShowCelebration(false);
+          }, 8000);
+        }
+      }
+      
+      return newCompletedWords;
+    });
+  };
+
+  const handleNewGame = () => {
+    setGameStarted(false);
+    setGameCompleted(false);
+    setShowCelebration(false);
+    setCompletedWords([]);
+    setScore(0);
+    setCrosswordData(null);
   };
 
   return (
@@ -85,7 +167,7 @@ function App() {
       <main>
         {!gameStarted ? (
           <>
-            <TopicSelector onSubmit={handleTopicSubmit} />
+            <TopicSelector onSubmit={handleTopicSubmit} loading={loading} />
             {loading && <div className="loader">Generating crossword puzzle...</div>}
           </>
         ) : (
@@ -100,6 +182,25 @@ function App() {
               crosswordData={crosswordData} 
               onWordComplete={handleWordComplete} 
             />
+            {gameCompleted && (
+              <button 
+                className="new-game-button"
+                onClick={handleNewGame}
+              >
+                Start New Game
+              </button>
+            )}
+          </>
+        )}
+        
+        {showCelebration && (
+          <>
+            <Fireworks duration={7000} />
+            <div className="celebration-message">
+              <h2>🎉 Congratulations! 🎉</h2>
+              <p>You've completed the crossword puzzle on "{topic}" with a score of {score}!</p>
+              <button onClick={handleNewGame}>Play Another Puzzle</button>
+            </div>
           </>
         )}
       </main>
@@ -361,45 +462,57 @@ function createCrosswordLayout(wordList) {
 
 // Function to check if a word can be placed vertically
 function canPlaceVertically(grid, word, row, col, intersectAt) {
+  const gridSize = grid.length;
   const startRow = row - intersectAt;
   
-  // Check if word would go off the grid
-  if (startRow < 0 || startRow + word.length > grid.length) {
+  // Check if word would go out of bounds
+  if (startRow < 0 || startRow + word.length > gridSize) {
     return false;
   }
   
-  // Check if the cells above and below the word are empty
-  if (startRow > 0 && grid[startRow - 1][col] !== '') {
-    return false;
-  }
-  if (startRow + word.length < grid.length && grid[startRow + word.length][col] !== '') {
-    return false;
-  }
-  
-  // Check each cell of the word
+  // Check if the position is already occupied by a different letter
+  // or if adjacent cells would cause words to run together
   for (let i = 0; i < word.length; i++) {
     const currentRow = startRow + i;
     
-    // If we're at the intersection, the letter must match
-    if (i === intersectAt) {
-      if (grid[currentRow][col] !== word[i]) {
-        return false;
-      }
-      continue;
-    }
-    
-    // Cell must be empty or have the correct letter
+    // Check if position is already filled with a different letter
     if (grid[currentRow][col] !== '' && grid[currentRow][col] !== word[i]) {
       return false;
     }
     
-    // Check adjacent cells (left and right) to ensure we don't place too close to other words
-    if (col > 0 && i !== intersectAt && grid[currentRow][col - 1] !== '') {
-      return false;
+    // Only check for adjacency if this isn't an intersection
+    if (grid[currentRow][col] === '') {
+      // Check cells to left and right to avoid unwanted horizontal adjacency
+      if ((col > 0 && grid[currentRow][col-1] !== '') || 
+          (col < gridSize-1 && grid[currentRow][col+1] !== '')) {
+        return false;
+      }
+      
+      // Check for letters adjacent but not part of this word placement
+      const isTopEdge = i === 0;
+      const isBottomEdge = i === word.length - 1;
+      
+      // Check top side (only for the first letter of the word)
+      if (isTopEdge && currentRow > 0 && grid[currentRow-1][col] !== '') {
+        return false;
+      }
+      
+      // Check bottom side (only for the last letter of the word)
+      if (isBottomEdge && currentRow < gridSize-1 && grid[currentRow+1][col] !== '') {
+        return false;
+      }
     }
-    if (col < grid[0].length - 1 && i !== intersectAt && grid[currentRow][col + 1] !== '') {
-      return false;
-    }
+  }
+  
+  // Add extra check for proper word boundaries
+  // Check if there's a letter immediately before the start of the word
+  if (startRow > 0 && grid[startRow - 1][col] !== '') {
+    return false;
+  }
+  
+  // Check if there's a letter immediately after the end of the word
+  if (startRow + word.length < gridSize && grid[startRow + word.length][col] !== '') {
+    return false;
   }
   
   return true;
@@ -407,45 +520,57 @@ function canPlaceVertically(grid, word, row, col, intersectAt) {
 
 // Function to check if a word can be placed horizontally
 function canPlaceHorizontally(grid, word, row, col, intersectAt) {
+  const gridSize = grid.length;
   const startCol = col - intersectAt;
   
-  // Check if word would go off the grid
-  if (startCol < 0 || startCol + word.length > grid[0].length) {
+  // Check if word would go out of bounds
+  if (startCol < 0 || startCol + word.length > gridSize) {
     return false;
   }
   
-  // Check if the cells to the left and right of the word are empty
-  if (startCol > 0 && grid[row][startCol - 1] !== '') {
-    return false;
-  }
-  if (startCol + word.length < grid[0].length && grid[row][startCol + word.length] !== '') {
-    return false;
-  }
-  
-  // Check each cell of the word
+  // Check if the position is already occupied by a different letter
+  // or if adjacent cells would cause words to run together
   for (let i = 0; i < word.length; i++) {
     const currentCol = startCol + i;
     
-    // If we're at the intersection, the letter must match
-    if (i === intersectAt) {
-      if (grid[row][currentCol] !== word[i]) {
-        return false;
-      }
-      continue;
-    }
-    
-    // Cell must be empty or have the correct letter
+    // Check if position is already filled with a different letter
     if (grid[row][currentCol] !== '' && grid[row][currentCol] !== word[i]) {
       return false;
     }
     
-    // Check adjacent cells (above and below) to ensure we don't place too close to other words
-    if (row > 0 && i !== intersectAt && grid[row - 1][currentCol] !== '') {
-      return false;
+    // Only check for adjacency if this isn't an intersection
+    if (grid[row][currentCol] === '') {
+      // Check cells above and below to avoid unwanted vertical adjacency
+      if ((row > 0 && grid[row-1][currentCol] !== '') || 
+          (row < gridSize-1 && grid[row+1][currentCol] !== '')) {
+        return false;
+      }
+      
+      // Check for letters adjacent but not part of this word placement
+      const isLeftEdge = i === 0;
+      const isRightEdge = i === word.length - 1;
+      
+      // Check left side (only for the first letter of the word)
+      if (isLeftEdge && currentCol > 0 && grid[row][currentCol-1] !== '') {
+        return false;
+      }
+      
+      // Check right side (only for the last letter of the word)
+      if (isRightEdge && currentCol < gridSize-1 && grid[row][currentCol+1] !== '') {
+        return false;
+      }
     }
-    if (row < grid.length - 1 && i !== intersectAt && grid[row + 1][currentCol] !== '') {
-      return false;
-    }
+  }
+  
+  // Add extra check for proper word boundaries
+  // Check if there's a letter immediately before the start of the word
+  if (startCol > 0 && grid[row][startCol - 1] !== '') {
+    return false;
+  }
+  
+  // Check if there's a letter immediately after the end of the word
+  if (startCol + word.length < gridSize && grid[row][startCol + word.length] !== '') {
+    return false;
   }
   
   return true;

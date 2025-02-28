@@ -6,6 +6,7 @@ function CrosswordGrid({ crosswordData, onWordComplete }) {
   const [selectedClue, setSelectedClue] = useState(null);
   const [completedWords, setCompletedWords] = useState([]);
   const [celebration, setCelebration] = useState(null);
+  const [completedWordIds, setCompletedWordIds] = useState([]);
 
   useEffect(() => {
     if (crosswordData) {
@@ -64,6 +65,61 @@ function CrosswordGrid({ crosswordData, onWordComplete }) {
     }
   }, [crosswordData]);
 
+  useEffect(() => {
+    if (!crosswordData || !crosswordData.words) return;
+    
+    // Track newly completed words in this check
+    const newlyCompleted = [];
+    
+    // Check for completed words
+    crosswordData.words.forEach(word => {
+      // Skip already completed words
+      if (completedWordIds.includes(word.word)) {
+        return;
+      }
+      
+      let isWordComplete = true;
+      
+      for (let i = 0; i < word.word.length; i++) {
+        const row = word.direction === 'horizontal' ? word.startRow : word.startRow + i;
+        const col = word.direction === 'horizontal' ? word.startCol + i : word.startCol;
+        const cellId = `${row}-${col}`;
+        
+        const expectedLetter = word.word[i];
+        const userLetter = userInputs[cellId] || '';
+        
+        if (userLetter.toUpperCase() !== expectedLetter) {
+          isWordComplete = false;
+          break;
+        }
+      }
+      
+      if (isWordComplete) {
+        newlyCompleted.push(word.word);
+      }
+    });
+    
+    // Update the completed words state if new words were completed
+    if (newlyCompleted.length > 0) {
+      setCompletedWordIds(prev => {
+        const uniqueNewWords = newlyCompleted.filter(word => !prev.includes(word));
+        
+        // Log completion status
+        console.log(`Newly completed words: ${uniqueNewWords.join(', ')}`);
+        console.log(`Total completed: ${prev.length + uniqueNewWords.length} of ${crosswordData.words.length}`);
+        
+        const updated = [...prev, ...uniqueNewWords];
+        
+        // Notify parent component about each newly completed word
+        uniqueNewWords.forEach(word => {
+          onWordComplete(word);
+        });
+        
+        return updated;
+      });
+    }
+  }, [userInputs, crosswordData, completedWordIds, onWordComplete]);
+
   const handleCellChange = (row, col, value) => {
     const cellId = `${row}-${col}`;
     const newInputs = { ...userInputs, [cellId]: value.toUpperCase() };
@@ -92,7 +148,7 @@ function CrosswordGrid({ crosswordData, onWordComplete }) {
       if (isComplete) {
         const newCompletedWords = [...completedWords, wordData.word];
         setCompletedWords(newCompletedWords);
-        onWordComplete(wordData);
+        onWordComplete(wordData.word);
         
         // Show celebration
         const celebrations = [
