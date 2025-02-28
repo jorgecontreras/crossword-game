@@ -6,7 +6,7 @@ A dynamic, topic-based crossword puzzle game built with React. Challenge yoursel
 
 ## Features
 
-- **Topic-based puzzles**: Select any topic and get a custom crossword puzzle related to that topic
+- **Topic-based puzzles**: Type any topic and get an AI generated crossword puzzle related to that topic
 - **Dynamic generation**: Every puzzle is unique and dynamically created
 - **Interactive gameplay**: Click on clues to highlight corresponding cells in the grid
 - **Score tracking**: Earn points based on the length of completed words
@@ -40,12 +40,24 @@ A dynamic, topic-based crossword puzzle game built with React. Challenge yoursel
    npm install
    ```
 
-3. Start the development server:
+3. Set up environment variables:
+   - Create a `.env` file in the root directory
+   - Add your Anthropic API key:
+     ```
+     ANTHROPIC_API_KEY=your_api_key_here
+     ```
+
+4. Start the development server:
    ```bash
    npm start
    ```
 
-4. Open your browser and navigate to `http://localhost:3000`
+5. In a separate terminal, start the backend server:
+   ```bash
+   npm run server
+   ```
+
+6. Open your browser and navigate to `http://localhost:3000`
 
 ## How to Play
 
@@ -80,4 +92,4 @@ This project is licensed under the MIT License - see the LICENSE file for detail
 ## Acknowledgments
 
 - Created by Jorge Contreras
-- Built as a learning project for React development
+- Powered by Anthropic API
