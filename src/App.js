@@ -3,6 +3,7 @@ import './App.css';
 import TopicSelector from './components/TopicSelector';
 import CrosswordGrid from './components/CrosswordGrid';
 import ScoreBoard from './components/ScoreBoard';
+import axios from 'axios';
 
 function App() {
   const [topic, setTopic] = useState('');
@@ -13,18 +14,58 @@ function App() {
   const [crosswordData, setCrosswordData] = useState(null);
   const [loading, setLoading] = useState(false);
 
+  // Static fallback word database
+  const fallbackWordData = {
+    technology: [
+      { word: "PROGRAMMING", clue: "The process of creating software" },
+      // ... other tech words ...
+    ],
+    sports: [
+      { word: "FOOTBALL", clue: "A game played with a ball by two teams of 11 players" },
+      // ... other sports words ...
+    ],
+    // ... other categories ...
+  };
+
   const handleTopicSubmit = async (selectedTopic) => {
     setTopic(selectedTopic);
     setLoading(true);
     
     try {
-      const data = await generateCrossword(selectedTopic);
+      // Try to get words from Anthropic API
+      const response = await axios.post('http://localhost:3020/api/generate-words', {
+        topic: selectedTopic
+      });
+      
+      const wordList = response.data.words;
+      
+      // Generate crossword with the dynamically generated words
+      let data = createCrosswordLayout(wordList);
+      
+      // Add prefilled cells to the crossword
+      data = addPrefilledCells(data);
+      
       setCrosswordData(data);
       setTotalWords(data.words.length);
       setGameStarted(true);
     } catch (error) {
       console.error("Error generating crossword:", error);
-      alert("Error generating crossword. Please try another topic.");
+      
+      // Use fallback word data
+      alert("Using default word list for this topic.");
+      
+      // Find closest matching topic in fallback data or use technology as default
+      let fallbackTopic = 'technology';
+      Object.keys(fallbackWordData).forEach(key => {
+        if (selectedTopic.toLowerCase().includes(key)) {
+          fallbackTopic = key;
+        }
+      });
+      
+      const data = createCrosswordLayout(fallbackWordData[fallbackTopic]);
+      setCrosswordData(data);
+      setTotalWords(data.words.length);
+      setGameStarted(true);
     } finally {
       setLoading(false);
     }
@@ -178,373 +219,118 @@ function shuffleArray(array) {
   return shuffled;
 }
 
-// Improved function to create a crossword layout
+// Only updating the createCrosswordLayout function
 function createCrosswordLayout(wordList) {
-  // Sort words by length (descending) to place longer words first
+  // Convert all words to uppercase for consistency
+  wordList = wordList.map(word => ({
+    ...word,
+    word: word.word.toUpperCase()
+  }));
+  
+  // Sort words by length (descending)
   wordList.sort((a, b) => b.word.length - a.word.length);
   
-  // Create a smaller grid (15x15 is standard for crosswords)
-  const gridSize = 15;
+  // Create a grid (standard crossword size)
+  const gridSize = 20;
   let grid = Array(gridSize).fill().map(() => Array(gridSize).fill(''));
+  
+  // Start with center position
+  const centerPos = Math.floor(gridSize / 2);
   
   // Track placed words
   const placedWords = [];
   
-  // Place the first (longest) word horizontally in the center
+  // Try to place the first word horizontally in the center
   const firstWord = wordList[0].word;
-  const centerRow = Math.floor(gridSize / 2);
-  const startCol = Math.floor((gridSize - firstWord.length) / 2);
+  const firstWordStart = Math.max(0, Math.floor((gridSize - firstWord.length) / 2));
   
-  // Place the first word
+  // Place first word
   for (let i = 0; i < firstWord.length; i++) {
-    grid[centerRow][startCol + i] = firstWord[i];
+    grid[centerPos][firstWordStart + i] = firstWord[i];
   }
   
+  // Add first word to placed words
   placedWords.push({
     word: firstWord,
     clue: wordList[0].clue,
     direction: 'horizontal',
-    startRow: centerRow,
-    startCol: startCol,
+    startRow: centerPos,
+    startCol: firstWordStart
   });
   
-  // Try to place remaining words with better intersection strategy
-  const remainingWords = wordList.slice(1);
-  
-  // Keep track of cells that already have letters
-  const filledCells = {};
+  // Create a map of all letters in the grid for faster lookup
+  let letterPositions = {};
   for (let i = 0; i < firstWord.length; i++) {
-    filledCells[`${centerRow},${startCol + i}`] = firstWord[i];
+    const letter = firstWord[i];
+    if (!letterPositions[letter]) {
+      letterPositions[letter] = [];
+    }
+    letterPositions[letter].push({
+      row: centerPos,
+      col: firstWordStart + i
+    });
   }
   
-  // Place remaining words
-  for (const wordData of remainingWords) {
-    const word = wordData.word;
+  // Place remaining words with improved intersection logic
+  for (let i = 1; i < wordList.length; i++) {
+    const currentWord = wordList[i].word;
     let placed = false;
     
-    // Try to find an intersection with already placed words
-    // For each letter in the current word
-    for (let charIndex = 0; charIndex < word.length && !placed; charIndex++) {
-      const char = word[charIndex];
+    // Skip words that are too long for the grid
+    if (currentWord.length > gridSize) continue;
+    
+    // Try to find an intersection with existing words
+    for (let c = 0; c < currentWord.length && !placed; c++) {
+      const letter = currentWord[c];
+      const positions = letterPositions[letter] || [];
       
-      // Check all filled cells for a matching character
-      for (const cellKey in filledCells) {
-        if (filledCells[cellKey] === char) {
-          const [row, col] = cellKey.split(',').map(Number);
-          
-          // Try to place horizontally if the existing character is part of a vertical word
-          // or vertically if part of a horizontal word
-          let canPlaceHorizontally = false;
-          let canPlaceVertically = false;
-          
-          // Check if this cell is part of a horizontal word
-          const isPartOfHorizontal = placedWords.some(
-            w => w.direction === 'horizontal' && 
-                w.startRow === row && 
-                col >= w.startCol && 
-                col < w.startCol + w.word.length
-          );
-          
-          // Check if this cell is part of a vertical word
-          const isPartOfVertical = placedWords.some(
-            w => w.direction === 'vertical' && 
-                w.startCol === col && 
-                row >= w.startRow && 
-                row < w.startRow + w.word.length
-          );
-          
-          // Only try to place vertically if the cell is part of a horizontal word (or vice versa)
-          if (isPartOfHorizontal && !isPartOfVertical) {
-            // Try vertical placement
-            const vertStartRow = row - charIndex;
-            
-            // Check if the word fits on the grid
-            if (vertStartRow >= 0 && vertStartRow + word.length <= gridSize) {
-              canPlaceVertically = checkVerticalPlacement(
-                grid, word, vertStartRow, col, charIndex, filledCells
-              );
-              
-              if (canPlaceVertically) {
-                // Place the word vertically
-                for (let i = 0; i < word.length; i++) {
-                  grid[vertStartRow + i][col] = word[i];
-                  filledCells[`${vertStartRow + i},${col}`] = word[i];
-                }
-                
-                placedWords.push({
-                  word: word,
-                  clue: wordData.clue,
-                  direction: 'vertical',
-                  startRow: vertStartRow,
-                  startCol: col,
-                });
-                
-                placed = true;
-                break;
-              }
-            }
-          }
-          
-          if (!placed && isPartOfVertical && !isPartOfHorizontal) {
-            // Try horizontal placement
-            const horizStartCol = col - charIndex;
-            
-            // Check if the word fits on the grid
-            if (horizStartCol >= 0 && horizStartCol + word.length <= gridSize) {
-              canPlaceHorizontally = checkHorizontalPlacement(
-                grid, word, row, horizStartCol, charIndex, filledCells
-              );
-              
-              if (canPlaceHorizontally) {
-                // Place the word horizontally
-                for (let i = 0; i < word.length; i++) {
-                  grid[row][horizStartCol + i] = word[i];
-                  filledCells[`${row},${horizStartCol + i}`] = word[i];
-                }
-                
-                placedWords.push({
-                  word: word,
-                  clue: wordData.clue,
-                  direction: 'horizontal',
-                  startRow: row,
-                  startCol: horizStartCol,
-                });
-                
-                placed = true;
-                break;
-              }
-            }
-          }
-        }
-      }
-      if (placed) break;
-    }
-    
-    // If we couldn't place the word through intersections and we have few words,
-    // try placing it adjacent to existing words
-    if (!placed && placedWords.length < 3) {
-      // Try to place word below the first word
-      const word = wordData.word;
-      const vertStartRow = centerRow + 1;
-      const vertStartCol = startCol + Math.floor(firstWord.length / 3);
-      
-      if (vertStartRow + word.length <= gridSize) {
-        const canPlace = checkVerticalPlacement(
-          grid, word, vertStartRow, vertStartCol, -1, filledCells
-        );
+      // For each position of this letter in the grid
+      for (let p = 0; p < positions.length && !placed; p++) {
+        const pos = positions[p];
         
-        if (canPlace) {
-          for (let i = 0; i < word.length; i++) {
-            grid[vertStartRow + i][vertStartCol] = word[i];
-            filledCells[`${vertStartRow + i},${vertStartCol}`] = word[i];
-          }
+        // Try to place vertically
+        if (canPlaceVertically(grid, currentWord, pos.row, pos.col, c)) {
+          placeWordVertically(grid, currentWord, pos.row, pos.col, c);
           
+          // Add this word to our placed words
           placedWords.push({
-            word: word,
-            clue: wordData.clue,
+            word: currentWord,
+            clue: wordList[i].clue,
             direction: 'vertical',
-            startRow: vertStartRow,
-            startCol: vertStartCol,
-          });
-        }
-      }
-    }
-  }
-  
-  // If we couldn't place enough words, start over with a simpler grid
-  if (placedWords.length < 4 && wordList.length >= 5) {
-    return createSimpleCrossword(wordList);
-  }
-  
-  // Fill in empty cells with black cells
-  for (let i = 0; i < gridSize; i++) {
-    for (let j = 0; j < gridSize; j++) {
-      if (grid[i][j] === '') {
-        grid[i][j] = '';  // Use empty string for black cells
-      }
-    }
-  }
-  
-  // Trim the grid to remove unnecessary rows/columns
-  grid = trimGrid(grid);
-  
-  // Adjust word positions based on trimming
-  const [rowOffset, colOffset] = getGridOffsets(grid, placedWords);
-  placedWords.forEach(word => {
-    word.startRow -= rowOffset;
-    word.startCol -= colOffset;
-  });
-  
-  return {
-    grid: grid,
-    words: placedWords
-  };
-}
-
-// Helper function to check if a word can be placed vertically
-function checkVerticalPlacement(grid, word, startRow, col, intersectIndex, filledCells) {
-  // Check each position
-  for (let i = 0; i < word.length; i++) {
-    const row = startRow + i;
-    
-    // Out of bounds check
-    if (row < 0 || row >= grid.length || col < 0 || col >= grid[0].length) {
-      return false;
-    }
-    
-    // Check if this cell already has a different letter
-    const existing = grid[row][col];
-    if (existing !== '' && existing !== word[i]) {
-      return false;
-    }
-    
-    // For non-intersection points, make sure adjacent cells are empty
-    if (i !== intersectIndex) {
-      // Check left and right cells aren't part of a horizontal word
-      if (filledCells[`${row},${col-1}`] || filledCells[`${row},${col+1}`]) {
-        return false;
-      }
-    }
-    
-    // Check if start position has a letter above it
-    if (i === 0 && row > 0 && grid[row-1][col] !== '') {
-      return false;
-    }
-    
-    // Check if end position has a letter below it
-    if (i === word.length - 1 && row < grid.length - 1 && grid[row+1][col] !== '') {
-      return false;
-    }
-  }
-  
-  return true;
-}
-
-// Helper function to check if a word can be placed horizontally
-function checkHorizontalPlacement(grid, word, row, startCol, intersectIndex, filledCells) {
-  // Check each position
-  for (let i = 0; i < word.length; i++) {
-    const col = startCol + i;
-    
-    // Out of bounds check
-    if (row < 0 || row >= grid.length || col < 0 || col >= grid[0].length) {
-      return false;
-    }
-    
-    // Check if this cell already has a different letter
-    const existing = grid[row][col];
-    if (existing !== '' && existing !== word[i]) {
-      return false;
-    }
-    
-    // For non-intersection points, make sure adjacent cells are empty
-    if (i !== intersectIndex) {
-      // Check cells above and below aren't part of a vertical word
-      if (filledCells[`${row-1},${col}`] || filledCells[`${row+1},${col}`]) {
-        return false;
-      }
-    }
-    
-    // Check if start position has a letter to the left
-    if (i === 0 && col > 0 && grid[row][col-1] !== '') {
-      return false;
-    }
-    
-    // Check if end position has a letter to the right
-    if (i === word.length - 1 && col < grid[0].length - 1 && grid[row][col+1] !== '') {
-      return false;
-    }
-  }
-  
-  return true;
-}
-
-// Function to create a simple crossword when the algorithm struggles
-function createSimpleCrossword(wordList) {
-  // Sort words by length (descending)
-  wordList.sort((a, b) => b.word.length - a.word.length);
-  
-  // Take only the first 5-7 words to ensure we can place them
-  const words = wordList.slice(0, Math.min(7, wordList.length));
-  
-  // Create grid large enough for our words
-  const gridSize = Math.max(words[0].word.length * 2, 15);
-  const grid = Array(gridSize).fill().map(() => Array(gridSize).fill(''));
-  
-  const placedWords = [];
-  
-  // Place first word horizontally in the center
-  const firstWord = words[0].word;
-  const centerRow = Math.floor(gridSize / 2);
-  const startCol = Math.floor((gridSize - firstWord.length) / 2);
-  
-  for (let i = 0; i < firstWord.length; i++) {
-    grid[centerRow][startCol + i] = firstWord[i];
-  }
-  
-  placedWords.push({
-    word: firstWord,
-    clue: words[0].clue,
-    direction: 'horizontal',
-    startRow: centerRow,
-    startCol: startCol,
-  });
-  
-  // Place second word vertically crossing the middle of the first word
-  if (words.length > 1) {
-    const secondWord = words[1].word;
-    const crossIndex = Math.floor(firstWord.length / 2);
-    const crossChar = firstWord[crossIndex];
-    
-    // Find where this character appears in the second word
-    for (let i = 0; i < secondWord.length; i++) {
-      if (secondWord[i] === crossChar) {
-        const vertStartRow = centerRow - i;
-        const vertCol = startCol + crossIndex;
-        
-        // Check if it fits
-        if (vertStartRow >= 0 && vertStartRow + secondWord.length <= gridSize) {
-          // Place the word
-          for (let j = 0; j < secondWord.length; j++) {
-            grid[vertStartRow + j][vertCol] = secondWord[j];
-          }
-          
-          placedWords.push({
-            word: secondWord,
-            clue: words[1].clue,
-            direction: 'vertical',
-            startRow: vertStartRow,
-            startCol: vertCol,
+            startRow: pos.row - c,
+            startCol: pos.col
           });
           
-          break;
+          // Update letter positions
+          updateLetterPositions(letterPositions, currentWord, 'vertical', pos.row - c, pos.col);
+          
+          placed = true;
+        }
+        // Try to place horizontally
+        else if (canPlaceHorizontally(grid, currentWord, pos.row, pos.col, c)) {
+          placeWordHorizontally(grid, currentWord, pos.row, pos.col, c);
+          
+          // Add this word to our placed words
+          placedWords.push({
+            word: currentWord,
+            clue: wordList[i].clue,
+            direction: 'horizontal',
+            startRow: pos.row,
+            startCol: pos.col - c
+          });
+          
+          // Update letter positions
+          updateLetterPositions(letterPositions, currentWord, 'horizontal', pos.row, pos.col - c);
+          
+          placed = true;
         }
       }
     }
-  }
-  
-  // For remaining words, place them in a simple pattern
-  let currentRow = centerRow + 3;
-  for (let i = 2; i < words.length; i++) {
-    const word = words[i].word;
-    const horizStartCol = Math.floor((gridSize - word.length) / 2);
     
-    // Check if we have space
-    if (currentRow < gridSize) {
-      // Place horizontally
-      for (let j = 0; j < word.length; j++) {
-        grid[currentRow][horizStartCol + j] = word[j];
-      }
-      
-      placedWords.push({
-        word: word,
-        clue: words[i].clue,
-        direction: 'horizontal',
-        startRow: currentRow,
-        startCol: horizStartCol,
-      });
-      
-      currentRow += 2;
+    // If we couldn't place the word with normal intersections, try with a more relaxed approach
+    if (!placed && placedWords.length >= 3) {
+      // Try to place word anywhere valid in the grid
+      placed = placeWordAnywhere(grid, currentWord, wordList[i].clue, placedWords, letterPositions, gridSize);
     }
   }
   
@@ -552,16 +338,16 @@ function createSimpleCrossword(wordList) {
   for (let i = 0; i < gridSize; i++) {
     for (let j = 0; j < gridSize; j++) {
       if (grid[i][j] === '') {
-        grid[i][j] = '';  // Use empty string for black cells
+        grid[i][j] = ' '; // space represents black cell
       }
     }
   }
   
-  // Trim the grid
+  // Trim the grid to remove excess padding
   const trimmedGrid = trimGrid(grid);
   
-  // Adjust word positions
-  const [rowOffset, colOffset] = getGridOffsets(grid, placedWords);
+  // Adjust word positions for trimmed grid
+  const [rowOffset, colOffset] = getGridOffsets(grid);
   placedWords.forEach(word => {
     word.startRow -= rowOffset;
     word.startCol -= colOffset;
@@ -573,17 +359,231 @@ function createSimpleCrossword(wordList) {
   };
 }
 
+// Function to check if a word can be placed vertically
+function canPlaceVertically(grid, word, row, col, intersectAt) {
+  const startRow = row - intersectAt;
+  
+  // Check if word would go off the grid
+  if (startRow < 0 || startRow + word.length > grid.length) {
+    return false;
+  }
+  
+  // Check if the cells above and below the word are empty
+  if (startRow > 0 && grid[startRow - 1][col] !== '') {
+    return false;
+  }
+  if (startRow + word.length < grid.length && grid[startRow + word.length][col] !== '') {
+    return false;
+  }
+  
+  // Check each cell of the word
+  for (let i = 0; i < word.length; i++) {
+    const currentRow = startRow + i;
+    
+    // If we're at the intersection, the letter must match
+    if (i === intersectAt) {
+      if (grid[currentRow][col] !== word[i]) {
+        return false;
+      }
+      continue;
+    }
+    
+    // Cell must be empty or have the correct letter
+    if (grid[currentRow][col] !== '' && grid[currentRow][col] !== word[i]) {
+      return false;
+    }
+    
+    // Check adjacent cells (left and right) to ensure we don't place too close to other words
+    if (col > 0 && i !== intersectAt && grid[currentRow][col - 1] !== '') {
+      return false;
+    }
+    if (col < grid[0].length - 1 && i !== intersectAt && grid[currentRow][col + 1] !== '') {
+      return false;
+    }
+  }
+  
+  return true;
+}
+
+// Function to check if a word can be placed horizontally
+function canPlaceHorizontally(grid, word, row, col, intersectAt) {
+  const startCol = col - intersectAt;
+  
+  // Check if word would go off the grid
+  if (startCol < 0 || startCol + word.length > grid[0].length) {
+    return false;
+  }
+  
+  // Check if the cells to the left and right of the word are empty
+  if (startCol > 0 && grid[row][startCol - 1] !== '') {
+    return false;
+  }
+  if (startCol + word.length < grid[0].length && grid[row][startCol + word.length] !== '') {
+    return false;
+  }
+  
+  // Check each cell of the word
+  for (let i = 0; i < word.length; i++) {
+    const currentCol = startCol + i;
+    
+    // If we're at the intersection, the letter must match
+    if (i === intersectAt) {
+      if (grid[row][currentCol] !== word[i]) {
+        return false;
+      }
+      continue;
+    }
+    
+    // Cell must be empty or have the correct letter
+    if (grid[row][currentCol] !== '' && grid[row][currentCol] !== word[i]) {
+      return false;
+    }
+    
+    // Check adjacent cells (above and below) to ensure we don't place too close to other words
+    if (row > 0 && i !== intersectAt && grid[row - 1][currentCol] !== '') {
+      return false;
+    }
+    if (row < grid.length - 1 && i !== intersectAt && grid[row + 1][currentCol] !== '') {
+      return false;
+    }
+  }
+  
+  return true;
+}
+
+// Function to place a word vertically
+function placeWordVertically(grid, word, row, col, intersectAt) {
+  const startRow = row - intersectAt;
+  for (let i = 0; i < word.length; i++) {
+    grid[startRow + i][col] = word[i];
+  }
+}
+
+// Function to place a word horizontally
+function placeWordHorizontally(grid, word, row, col, intersectAt) {
+  const startCol = col - intersectAt;
+  for (let i = 0; i < word.length; i++) {
+    grid[row][startCol + i] = word[i];
+  }
+}
+
+// Function to update letter positions
+function updateLetterPositions(letterPositions, word, direction, startRow, startCol) {
+  for (let i = 0; i < word.length; i++) {
+    const letter = word[i];
+    if (!letterPositions[letter]) {
+      letterPositions[letter] = [];
+    }
+    
+    if (direction === 'horizontal') {
+      letterPositions[letter].push({
+        row: startRow,
+        col: startCol + i
+      });
+    } else {
+      letterPositions[letter].push({
+        row: startRow + i,
+        col: startCol
+      });
+    }
+  }
+}
+
+// Function to place a word anywhere in the grid as a last resort
+function placeWordAnywhere(grid, word, clue, placedWords, letterPositions, gridSize) {
+  // Try to place horizontally in an open area
+  for (let row = 1; row < gridSize - 1; row++) {
+    for (let col = 1; col < gridSize - word.length - 1; col++) {
+      // Check if this area is open
+      let open = true;
+      for (let i = -1; i <= word.length; i++) {
+        if (col + i < 0 || col + i >= gridSize) continue;
+        
+        if (grid[row - 1][col + i] !== '' || 
+            grid[row + 1][col + i] !== '' ||
+            (i >= 0 && i < word.length && grid[row][col + i] !== '')) {
+          open = false;
+          break;
+        }
+      }
+      
+      if (open) {
+        // Place word horizontally
+        for (let i = 0; i < word.length; i++) {
+          grid[row][col + i] = word[i];
+        }
+        
+        // Add to placed words
+        placedWords.push({
+          word: word,
+          clue: clue,
+          direction: 'horizontal',
+          startRow: row,
+          startCol: col
+        });
+        
+        // Update letter positions
+        updateLetterPositions(letterPositions, word, 'horizontal', row, col);
+        
+        return true;
+      }
+    }
+  }
+  
+  // Try to place vertically in an open area
+  for (let col = 1; col < gridSize - 1; col++) {
+    for (let row = 1; row < gridSize - word.length - 1; row++) {
+      // Check if this area is open
+      let open = true;
+      for (let i = -1; i <= word.length; i++) {
+        if (row + i < 0 || row + i >= gridSize) continue;
+        
+        if (grid[row + i][col - 1] !== '' || 
+            grid[row + i][col + 1] !== '' ||
+            (i >= 0 && i < word.length && grid[row + i][col] !== '')) {
+          open = false;
+          break;
+        }
+      }
+      
+      if (open) {
+        // Place word vertically
+        for (let i = 0; i < word.length; i++) {
+          grid[row + i][col] = word[i];
+        }
+        
+        // Add to placed words
+        placedWords.push({
+          word: word,
+          clue: clue,
+          direction: 'vertical',
+          startRow: row,
+          startCol: col
+        });
+        
+        // Update letter positions
+        updateLetterPositions(letterPositions, word, 'vertical', row, col);
+        
+        return true;
+      }
+    }
+  }
+  
+  return false;
+}
+
 // Helper function to trim excess rows and columns
 function trimGrid(grid) {
   // Find boundaries of content
-  let minRow = grid.length, maxRow = 0, minCol = grid[0].length, maxCol = 0;
+  let minRow = grid.length, minCol = grid[0].length;
+  let maxRow = 0, maxCol = 0;
   
   for (let i = 0; i < grid.length; i++) {
     for (let j = 0; j < grid[i].length; j++) {
-      if (grid[i][j] !== ' ' && grid[i][j] !== '') {
+      if (grid[i][j] !== '' && grid[i][j] !== ' ') {
         minRow = Math.min(minRow, i);
-        maxRow = Math.max(maxRow, i);
         minCol = Math.min(minCol, j);
+        maxRow = Math.max(maxRow, i);
         maxCol = Math.max(maxCol, j);
       }
     }
@@ -609,12 +609,12 @@ function trimGrid(grid) {
 }
 
 // Helper to get offsets for word position adjustment
-function getGridOffsets(grid, placedWords) {
+function getGridOffsets(grid) {
   let minRow = grid.length, minCol = grid[0].length;
   
   for (let i = 0; i < grid.length; i++) {
     for (let j = 0; j < grid[i].length; j++) {
-      if (grid[i][j] !== ' ' && grid[i][j] !== '') {
+      if (grid[i][j] !== '' && grid[i][j] !== ' ') {
         minRow = Math.min(minRow, i);
         minCol = Math.min(minCol, j);
       }
@@ -622,6 +622,109 @@ function getGridOffsets(grid, placedWords) {
   }
   
   return [minRow, minCol];
+}
+
+// Replace the existing addPrefilledCells function with this improved version
+function addPrefilledCells(crosswordData) {
+  const { grid, words } = crosswordData;
+  
+  // Create a map of words by their actual text
+  const wordsByText = {};
+  words.forEach(word => {
+    if (!wordsByText[word.word]) {
+      wordsByText[word.word] = [];
+    }
+    wordsByText[word.word].push(word);
+  });
+  
+  // Initialize prefilledPositions
+  crosswordData.prefilledPositions = [];
+  
+  // STRATEGY 1: Prefill all short words (3 letters or less)
+  words.forEach(word => {
+    if (word.word.length <= 3) {
+      // For very short words, prefill the first letter
+      const row = word.startRow;
+      const col = word.startCol;
+      crosswordData.prefilledPositions.push({ row, col });
+    }
+  });
+  
+  // STRATEGY 2: Handle all duplicates (regardless of direction)
+  Object.entries(wordsByText)
+    .filter(([text, instances]) => instances.length > 1)
+    .forEach(([text, instances]) => {
+      // For each instance of the duplicate word
+      instances.forEach((word, index) => {
+        // For the first instance, prefill the first character
+        // For others, prefill different characters to disambiguate
+        const positionToPrefill = index % word.word.length;
+        const row = word.direction === 'horizontal' 
+          ? word.startRow 
+          : word.startRow + positionToPrefill;
+        const col = word.direction === 'horizontal' 
+          ? word.startCol + positionToPrefill 
+          : word.startCol;
+        
+        crosswordData.prefilledPositions.push({ row, col });
+      });
+    });
+  
+  // STRATEGY 3: For medium-length words (4-6 letters), add strategic hints
+  words.forEach(word => {
+    if (word.word.length >= 4 && word.word.length <= 6) {
+      // Prefill a strategic position (40% into the word)
+      const idx = Math.floor(word.word.length * 0.4);
+      const row = word.direction === 'horizontal' ? word.startRow : word.startRow + idx;
+      const col = word.direction === 'horizontal' ? word.startCol + idx : word.startCol;
+      
+      // Only add if not already prefilled
+      const alreadyPrefilled = crosswordData.prefilledPositions.some(
+        pos => pos.row === row && pos.col === col
+      );
+      
+      if (!alreadyPrefilled) {
+        crosswordData.prefilledPositions.push({ row, col });
+      }
+    }
+  });
+  
+  // STRATEGY 4: For very dense areas of the grid, add more hints
+  // Find cell density (how many words pass through each cell)
+  const cellDensity = {};
+  words.forEach(word => {
+    for (let i = 0; i < word.word.length; i++) {
+      const row = word.direction === 'horizontal' ? word.startRow : word.startRow + i;
+      const col = word.direction === 'horizontal' ? word.startCol + i : word.startCol;
+      const key = `${row},${col}`;
+      
+      if (!cellDensity[key]) {
+        cellDensity[key] = 0;
+      }
+      cellDensity[key]++;
+    }
+  });
+  
+  // Prefill cells that have multiple words passing through them
+  Object.entries(cellDensity)
+    .filter(([key, count]) => count > 1)
+    .forEach(([key, count]) => {
+      const [row, col] = key.split(',').map(Number);
+      
+      // Only add if not already prefilled
+      const alreadyPrefilled = crosswordData.prefilledPositions.some(
+        pos => pos.row === row && pos.col === col
+      );
+      
+      if (!alreadyPrefilled) {
+        crosswordData.prefilledPositions.push({ row: row, col: col });
+      }
+    });
+  
+  // Debug output
+  console.log(`Added ${crosswordData.prefilledPositions.length} prefilled cells`);
+  
+  return crosswordData;
 }
 
 export default App; 

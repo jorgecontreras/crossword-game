@@ -13,6 +13,8 @@ function CrosswordGrid({ crosswordData, onWordComplete }) {
       
       // Initialize user inputs
       const inputs = {};
+      
+      // First, initialize all cells as empty
       crosswordData.words.forEach(word => {
         for (let i = 0; i < word.word.length; i++) {
           const row = word.direction === 'horizontal' ? word.startRow : word.startRow + i;
@@ -21,6 +23,43 @@ function CrosswordGrid({ crosswordData, onWordComplete }) {
           inputs[cellId] = '';
         }
       });
+      
+      // Then, fill in prefilled cells
+      if (crosswordData.prefilledPositions && crosswordData.prefilledPositions.length > 0) {
+        crosswordData.prefilledPositions.forEach(pos => {
+          // Find which word(s) this position belongs to
+          const matchingWords = crosswordData.words.filter(word => {
+            for (let i = 0; i < word.word.length; i++) {
+              const row = word.direction === 'horizontal' ? word.startRow : word.startRow + i;
+              const col = word.direction === 'horizontal' ? word.startCol + i : word.startCol;
+              if (row === pos.row && col === pos.col) {
+                return true;
+              }
+            }
+            return false;
+          });
+          
+          if (matchingWords.length > 0) {
+            // Get the letter for this position
+            let letter = '';
+            matchingWords.forEach(word => {
+              for (let i = 0; i < word.word.length; i++) {
+                const row = word.direction === 'horizontal' ? word.startRow : word.startRow + i;
+                const col = word.direction === 'horizontal' ? word.startCol + i : word.startCol;
+                if (row === pos.row && col === pos.col) {
+                  letter = word.word[i];
+                  break;
+                }
+              }
+            });
+            
+            if (letter) {
+              inputs[`${pos.row}-${pos.col}`] = letter;
+            }
+          }
+        });
+      }
+      
       setUserInputs(inputs);
     }
   }, [crosswordData]);
@@ -96,6 +135,39 @@ function CrosswordGrid({ crosswordData, onWordComplete }) {
     });
   };
 
+  const Cell = ({ value, row, col, isSelected, isCompleted, onChange }) => {
+    const isPrefilled = crosswordData.prefilledPositions && 
+      crosswordData.prefilledPositions.some(pos => pos.row === row && pos.col === col);
+    
+    const handleChange = (e) => {
+      // Don't allow changes to prefilled cells
+      if (isPrefilled) return;
+      
+      const newValue = e.target.value;
+      if (newValue.length <= 1) {
+        onChange(row, col, newValue);
+        
+        // Auto-advance to next cell if value is added
+        if (newValue && e.target.nextElementSibling) {
+          e.target.nextElementSibling.focus();
+        }
+      }
+    };
+    
+    return (
+      <input
+        type="text"
+        maxLength="1"
+        value={value}
+        onChange={handleChange}
+        className={`cell-input ${isSelected ? 'selected' : ''} 
+                  ${isCompleted ? 'completed' : ''} 
+                  ${isPrefilled ? 'prefilled' : ''}`}
+        readOnly={isPrefilled}
+      />
+    );
+  };
+
   if (!crosswordData) return <div>Loading crossword...</div>;
 
   return (
@@ -123,12 +195,12 @@ function CrosswordGrid({ crosswordData, onWordComplete }) {
                   className={`grid-cell ${!isPlayableCell ? 'empty' : ''} ${isActive ? 'active' : ''}`}
                 >
                   {isPlayableCell && (
-                    <input
-                      type="text"
-                      maxLength="1"
+                    <Cell
                       value={userInputs[cellId] || ''}
-                      onChange={(e) => handleCellChange(rowIndex, colIndex, e.target.value)}
-                      className={completedWords.some(word => {
+                      row={rowIndex}
+                      col={colIndex}
+                      isSelected={isActive}
+                      isCompleted={completedWords.some(word => {
                         return crosswordData.words.some(w => 
                           w.word === word && (
                             (w.direction === 'horizontal' && 
@@ -142,6 +214,7 @@ function CrosswordGrid({ crosswordData, onWordComplete }) {
                           )
                         );
                       }) ? 'completed' : ''}
+                      onChange={handleCellChange}
                     />
                   )}
                 </div>

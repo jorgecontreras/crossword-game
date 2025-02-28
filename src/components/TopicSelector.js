@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 
-function TopicSelector({ onSubmit }) {
+function TopicSelector({ onSubmit, loading }) {
   const [topic, setTopic] = useState('');
 
   const handleSubmit = (e) => {
@@ -21,9 +21,13 @@ function TopicSelector({ onSubmit }) {
           onChange={(e) => setTopic(e.target.value)}
           placeholder="e.g., Technology, Sports, Movies, etc."
           required
+          disabled={loading}
         />
-        <button type="submit">Create Crossword</button>
+        <button type="submit" disabled={loading}>
+          {loading ? 'Generating...' : 'Create Crossword'}
+        </button>
       </form>
+      {loading && <p className="loading-text">Using AI to create your custom crossword. This may take a moment...</p>}
     </div>
   );
 }
